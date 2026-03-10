@@ -62,10 +62,11 @@ describe('Token', () => {
       });
 
       const deployer = new ContractDeployer(TokenContractArtifact, wallet, undefined, 'constructor_with_minter');
-      const contract = await deployer.deploy('PrivateToken', 'PT', 18, deployerWallet, deployerWallet).send({
+      const deployment = await deployer.deploy('PrivateToken', 'PT', 18, deployerWallet, deployerWallet).send({
         contractAddressSalt: salt,
         from: deployerWallet,
       });
+      const contract = deployment.contract;
 
       const contractMetadata = await wallet.getContractMetadata(deploymentData.address);
       expect(contractMetadata).toBeDefined();
@@ -94,9 +95,10 @@ describe('Token', () => {
         undefined,
         'constructor_with_initial_supply',
       );
-      const contract = await deployer
+      const deployment = await deployer
         .deploy('PrivateToken', 'PT', 18, 1, deployerWallet, deployerWallet)
         .send({ contractAddressSalt: salt, from: deployerWallet });
+      const contract = deployment.contract;
 
       const contractMetadata = await wallet.getContractMetadata(deploymentData.address);
       expect(contractMetadata).toBeDefined();

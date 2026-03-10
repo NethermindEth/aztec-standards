@@ -11,6 +11,7 @@ export default defineConfig({
       // Force a concrete file path so CI doesn't resolve a nested version without `anumber`
       '@noble/hashes/utils': nobleUtilsPath,
     },
+    dedupe: ['@aztec/foundation', '@aztec/stdlib', '@aztec/constants', '@aztec/bb.js'],
     conditions: ['import', 'module', 'browser', 'default'],
   },
   test: {

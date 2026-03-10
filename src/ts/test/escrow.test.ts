@@ -143,10 +143,11 @@ describe('Escrow', () => {
       });
 
       const deployer = new ContractDeployer(TestLogicContractArtifact, wallet, undefined, 'constructor');
-      const contract = await deployer.deploy(escrowClassId).send({
+      const deployment = await deployer.deploy(escrowClassId).send({
         contractAddressSalt: escrowSalt,
         from: alice,
       });
+      const contract = deployment.contract;
 
       const contractMetadata = await wallet.getContractMetadata(deploymentData.address);
       expect(contractMetadata).toBeDefined();

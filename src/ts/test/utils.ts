@@ -10,7 +10,7 @@ import { TxHash } from '@aztec/aztec.js/tx';
 import { PRIVATE_LOG_CIPHERTEXT_LEN, DomainSeparator } from '@aztec/constants';
 import { poseidon2HashWithSeparator } from '@aztec/foundation/crypto/poseidon';
 import { EmbeddedWallet } from '@aztec/wallets/embedded';
-import { registerInitialLocalNetworkAccountsInWallet } from '@aztec/wallets/testing';
+import { getInitialTestAccountsData } from '@aztec/accounts/testing/lazy';
 import { deriveMasterIncomingViewingSecretKey, PublicKeys, computeAddressSecret } from '@aztec/stdlib/keys';
 
 import {
@@ -64,6 +64,32 @@ const node = createAztecNodeClient(getNodeUrl());
 await waitForNode(node);
 const config = getPXEConfig();
 
+const normalizeFr = (value: Fr) => Fr.fromString(value.toString());
+
+const registerInitialAccounts = async (wallet: EmbeddedWallet) => {
+  const testAccounts = await getInitialTestAccountsData();
+  const accountCache = new Map<string, Awaited<ReturnType<AccountManager['getAccount']>>>();
+  const accounts = await Promise.all(
+    testAccounts.map(async (account) => {
+      const accountManager = await wallet.createSchnorrAccount(
+        normalizeFr(account.secret),
+        normalizeFr(account.salt),
+        account.signingKey,
+      );
+      accountCache.set(accountManager.address.toString(), await accountManager.getAccount());
+      return accountManager.address;
+    }),
+  );
+
+  const originalGetAccountFromAddress = wallet.getAccountFromAddress.bind(wallet);
+  wallet.getAccountFromAddress = async (address) => {
+    const cachedAccount = accountCache.get(address.toString());
+    return cachedAccount ?? originalGetAccountFromAddress(address);
+  };
+
+  return accounts;
+};
+
 /**
  * Setup the node, wallet and accounts.
  * Lets createPXE handle store creation and l1Contracts fetching internally.
@@ -82,7 +108,7 @@ export const setupTestSuite = async (proverEnabled: boolean = false) => {
 
   const wallet: EmbeddedWallet = await EmbeddedWallet.create(node, { pxeConfig });
 
-  const accounts: AztecAddress[] = await registerInitialLocalNetworkAccountsInWallet(wallet);
+  const accounts: AztecAddress[] = await registerInitialAccounts(wallet);
 
   const cleanup = async () => {
     await wallet.stop();
@@ -142,7 +168,7 @@ export const wad = (n: number = 1) => AMOUNT * BigInt(n);
  * @returns A deployed contract instance.
  */
 export async function deployTokenWithMinter(wallet: Wallet, deployer: AztecAddress, options?: DeployOptions) {
-  const contract = await TokenContract.deployWithOpts(
+  const deployment = await TokenContract.deployWithOpts(
     { method: 'constructor_with_minter', wallet },
     'PrivateToken',
     'PT',
@@ -150,7 +176,7 @@ export async function deployTokenWithMinter(wallet: Wallet, deployer: AztecAddre
     deployer,
     AztecAddress.ZERO,
   ).send({ ...options, from: deployer });
-  return contract;
+  return deployment.contract;
 }
 
 /**
@@ -160,7 +186,7 @@ export async function deployTokenWithMinter(wallet: Wallet, deployer: AztecAddre
  * @returns A deployed contract instance.
  */
 export async function deployTokenWithInitialSupply(wallet: Wallet, deployer: AztecAddress, options?: DeployOptions) {
-  const contract = await TokenContract.deployWithOpts(
+  const deployment = await TokenContract.deployWithOpts(
     { method: 'constructor_with_initial_supply', wallet },
     'PrivateToken',
     'PT',
@@ -169,7 +195,7 @@ export async function deployTokenWithInitialSupply(wallet: Wallet, deployer: Azt
     deployer,
     deployer,
   ).send({ ...options, from: deployer });
-  return contract;
+  return deployment.contract;
 }
 
 // --- NFT Utils ---
@@ -203,14 +229,14 @@ export async function assertOwnsPrivateNFT(
 
 // Deploy NFT contract with a minter
 export async function deployNFTWithMinter(wallet: EmbeddedWallet, deployer: AztecAddress, options?: DeployOptions) {
-  const contract = await NFTContract.deployWithOpts(
+  const deployment = await NFTContract.deployWithOpts(
     { method: 'constructor_with_minter', wallet },
     'TestNFT',
     'TNFT',
     deployer,
     deployer,
   ).send({ ...options, from: deployer });
-  return contract;
+  return deployment.contract;
 }
 
 // --- Tokenized Vault Utils ---
@@ -226,7 +252,7 @@ export async function deployVaultAndAssetWithMinter(
   deployer: AztecAddress,
   options?: DeployOptions,
 ): Promise<[Contract, Contract]> {
-  const assetContract = await TokenContract.deployWithOpts(
+  const assetDeployment = await TokenContract.deployWithOpts(
     { method: 'constructor_with_minter', wallet },
     'PrivateToken',
     'PT',
@@ -234,8 +260,9 @@ export async function deployVaultAndAssetWithMinter(
     deployer,
     AztecAddress.ZERO,
   ).send({ ...options, from: deployer });
+  const assetContract = assetDeployment.contract;
 
-  const vaultContract = await TokenContract.deployWithOpts(
+  const vaultDeployment = await TokenContract.deployWithOpts(
     { method: 'constructor_with_asset', wallet },
     'VaultToken',
     'VT',
@@ -244,6 +271,7 @@ export async function deployVaultAndAssetWithMinter(
     1,
     AztecAddress.ZERO,
   ).send({ ...options, from: deployer });
+  const vaultContract = vaultDeployment.contract;
 
   return [vaultContract, assetContract];
 }
@@ -259,7 +287,7 @@ export async function deployVaultWithInitialDeposit(
   depositor: AztecAddress,
   options?: DeployOptions,
 ): Promise<TokenContract> {
-  const vaultContract = (await TokenContract.deployWithOpts(
+  const vaultDeployment = await TokenContract.deployWithOpts(
     { method: 'constructor_with_asset', wallet },
     'VaultToken',
     'VT',
@@ -267,7 +295,8 @@ export async function deployVaultWithInitialDeposit(
     assetContract.address,
     1,
     AztecAddress.ZERO,
-  ).send({ ...options, from: deployer })) as TokenContract;
+  ).send({ ...options, from: deployer });
+  const vaultContract = vaultDeployment.contract;
 
   if (initialDeposit > 0n) {
     const transfer = assetContract.methods.transfer_public_to_public(
@@ -303,11 +332,12 @@ export async function deployEscrow(
   deployer: AztecAddress,
   salt: Fr = Fr.random(),
 ): Promise<{ contract: EscrowContract; instance: ContractInstanceWithAddress }> {
-  const contract = await EscrowContract.deployWithPublicKeys(publicKeys, wallet).send({
+  const deployment = await EscrowContract.deployWithPublicKeys(publicKeys, wallet).send({
     contractAddressSalt: salt,
     universalDeploy: true,
     from: deployer,
   });
+  const contract = deployment.contract;
 
   // Get the instance from the node after deployment
   const instance = (await node.getContract(contract.address)) as ContractInstanceWithAddress;
@@ -427,11 +457,11 @@ export async function initializeTransferCommitmentNFT(
  * @returns A deployed contract instance.
  */
 export async function deployLogic(wallet: Wallet, deployer: AztecAddress, escrowClassId: Fr) {
-  const contract = await TestLogicContract.deployWithOpts({ method: 'constructor', wallet }, escrowClassId).send({
+  const deployment = await TestLogicContract.deployWithOpts({ method: 'constructor', wallet }, escrowClassId).send({
     from: deployer,
   });
 
-  return contract;
+  return deployment.contract;
 }
 
 /**
@@ -450,12 +480,12 @@ export async function deployEscrowWithPublicKeysAndSalt(
   deployer: AztecAddress,
   salt: Fr = Fr.random(),
 ): Promise<EscrowContract> {
-  const contract = await EscrowContract.deployWithPublicKeys(publicKeys, wallet).send({
+  const deployment = await EscrowContract.deployWithPublicKeys(publicKeys, wallet).send({
     contractAddressSalt: salt,
     universalDeploy: true,
     from: deployer,
   });
-  return contract;
+  return deployment.contract;
 }
 
 /**

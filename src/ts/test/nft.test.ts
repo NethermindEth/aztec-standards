@@ -63,9 +63,10 @@ describe('NFT', () => {
 
       const deployer = new ContractDeployer(NFTContractArtifact, wallet, undefined, 'constructor_with_minter');
 
-      const contract = await deployer
+      const deployment = await deployer
         .deploy('TestNFT', 'TNFT', deployerWallet, deployerWallet)
         .send({ contractAddressSalt: salt, from: deployerWallet });
+      const contract = deployment.contract;
 
       const contractMetadata = await wallet.getContractMetadata(deploymentData.address);
       expect(contractMetadata).toBeDefined();
